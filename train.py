@@ -175,6 +175,11 @@ def main(cfg, gpus):
         pin_memory=True)
     print('1 Epoch = {} iters'.format(cfg.TRAIN.epoch_iters))
 
+    if torch.cuda.is_available():
+        for ele in loader_train:
+            for keys in ele[0].keys():
+                ele[0][keys].cuda()
+
     # create loader iterator
     iterator_train = iter(loader_train)
     # load nets into gpu
