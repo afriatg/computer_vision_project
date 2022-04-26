@@ -15,6 +15,29 @@ from mit_semseg.models import ModelBuilder, SegmentationModule
 from mit_semseg.utils import AverageMeter, parse_devices, setup_logger
 from mit_semseg.lib.nn import UserScatteredDataParallel, user_scattered_collate, patch_replication_callback
 
+import torch.nn.functional as F
+
+class Discriminator(nn.Module):
+    def __init__(self):
+      super(Discriminator, self).__init__()
+
+      self.conv1 = nn.Conv2d(512, 64, 3, 3)
+      self.dropout1 = nn.Dropout2d(0.25)
+      self.dropout2 = nn.Dropout2d(0.5)
+      self.fc1 = nn.Linear(5632, 352)
+      self.fc2 = nn.Linear(352, 2)
+
+    def forward(self, x):
+      x = self.conv1(x)
+      x = F.relu(x)
+      x = self.dropout1(x)
+      x = torch.flatten(x, 1)
+      x = self.fc1(x)
+      x = F.relu(x)
+      x = self.dropout2(x)
+      x = self.fc2(x)
+      output = F.softmax(x, dim=1)
+      return output
 
 # train one epoch
 def train(segmentation_module, iterator, optimizers, history, epoch, cfg):
@@ -73,7 +96,7 @@ def train(segmentation_module, iterator, optimizers, history, epoch, cfg):
 
 def checkpoint(nets, history, cfg, epoch):
     print('Saving checkpoints...')
-    (net_encoder, net_decoder, crit) = nets
+    (net_encoder, net_decoder, _, crit) = nets
 
     dict_encoder = net_encoder.state_dict()
     dict_decoder = net_decoder.state_dict()
@@ -113,7 +136,7 @@ def group_weight(module):
 
 
 def create_optimizers(nets, cfg):
-    (net_encoder, net_decoder, crit) = nets
+    (net_encoder, net_decoder, discriminator, crit) = nets
     optimizer_encoder = torch.optim.SGD(
         group_weight(net_encoder),
         lr=cfg.TRAIN.lr_encoder,
@@ -124,7 +147,11 @@ def create_optimizers(nets, cfg):
         lr=cfg.TRAIN.lr_decoder,
         momentum=cfg.TRAIN.beta1,
         weight_decay=cfg.TRAIN.weight_decay)
-    return (optimizer_encoder, optimizer_decoder)
+    if discriminator != None:
+        optimizer_discriminator = torch.optim.Adam(discriminator.parameters(), lr=0.001)
+    else:
+        optimizer_discriminator = None
+    return (optimizer_encoder, optimizer_decoder, optimizer_discriminator)
 
 
 def adjust_learning_rate(optimizers, cur_iter, cfg):
@@ -132,7 +159,7 @@ def adjust_learning_rate(optimizers, cur_iter, cfg):
     cfg.TRAIN.running_lr_encoder = cfg.TRAIN.lr_encoder * scale_running_lr
     cfg.TRAIN.running_lr_decoder = cfg.TRAIN.lr_decoder * scale_running_lr
 
-    (optimizer_encoder, optimizer_decoder) = optimizers
+    (optimizer_encoder, optimizer_decoder, _) = optimizers
     for param_group in optimizer_encoder.param_groups:
         param_group['lr'] = cfg.TRAIN.running_lr_encoder
     for param_group in optimizer_decoder.param_groups:
@@ -151,12 +178,15 @@ def main(cfg, gpus):
         num_class=cfg.DATASET.num_class,
         weights=cfg.MODEL.weights_decoder)
     crit = nn.NLLLoss(ignore_index=-1)
+    discriminator = Discriminator()
+    if torch.cuda.is_available():
+        discriminator.cuda()
     if cfg.MODEL.arch_decoder.endswith('deepsup'):
         segmentation_module = SegmentationModule(
-            net_encoder, net_decoder, crit, cfg.TRAIN.deep_sup_scale)
+            net_encoder, net_decoder, discriminator, crit, cfg.TRAIN.deep_sup_scale)
     else:
         segmentation_module = SegmentationModule(
-            net_encoder, net_decoder, crit)
+            net_encoder, net_decoder, discriminator, crit)
 
     # Dataset and Loader
     dataset_train = TrainDataset(
@@ -180,6 +210,28 @@ def main(cfg, gpus):
             for keys in ele[0].keys():
                 ele[0][keys].cuda()
 
+    # import pickle
+    # l_heights = []
+    # l_widths = []
+    # acc = 0
+    # for ele in loader_train:
+    #     acc +=1
+    #     for keys in ele[0].keys():
+    #         try:
+    #             _,_,h,w = ele[0][keys].shape
+    #             l_heights.append(h)
+    #             l_widths.append(w)
+    #         except:
+    #             _,h,w = ele[0][keys].shape
+    #             l_heights.append(h)
+    #             l_widths.append(w)
+    #     if acc == 1000:
+    #         with open('eda_sizes/heights.pkl', 'wb') as f:
+    #             pickle.dump(l_heights, f)
+    #         with open('eda_sizes/widths.pkl', 'wb') as f:
+    #             pickle.dump(l_widths, f)
+    #         import ipdb;ipdb.set_trace()
+
     # create loader iterator
     iterator_train = iter(loader_train)
     # load nets into gpu
@@ -193,7 +245,8 @@ def main(cfg, gpus):
         segmentation_module.cuda()
 
     # Set up optimizers
-    nets = (net_encoder, net_decoder, crit)
+    nets = (net_encoder, net_decoder, discriminator, crit)
+
     optimizers = create_optimizers(nets, cfg)
 
     # Main loop

@@ -4,6 +4,26 @@ from . import resnet, resnext, mobilenet, hrnet
 from mit_semseg.lib.nn import SynchronizedBatchNorm2d
 BatchNorm2d = SynchronizedBatchNorm2d
 
+from PIL import Image
+import os
+import json
+from torchvision import transforms
+import numpy as np
+import scipy.io
+from mit_semseg.utils import colorEncode
+import torchvision
+
+def imresize(im, size, interp='bilinear'):
+    if interp == 'nearest':
+        resample = Image.NEAREST
+    elif interp == 'bilinear':
+        resample = Image.BILINEAR
+    elif interp == 'bicubic':
+        resample = Image.BICUBIC
+    else:
+        raise Exception('resample method undefined!')
+
+    return im.resize(size, resample)
 
 class SegmentationModuleBase(nn.Module):
     def __init__(self):
@@ -19,12 +39,17 @@ class SegmentationModuleBase(nn.Module):
 
 
 class SegmentationModule(SegmentationModuleBase):
-    def __init__(self, net_enc, net_dec, crit, deep_sup_scale=None):
+    def __init__(self, net_enc, net_dec, discriminator, crit, deep_sup_scale=None):
         super(SegmentationModule, self).__init__()
         self.encoder = net_enc
         self.decoder = net_dec
+        self.discriminator = discriminator
         self.crit = crit
         self.deep_sup_scale = deep_sup_scale
+        temp_vgg16 = torchvision.models.vgg16(pretrained=True)
+        self.vgg16 = torch.nn.Sequential(*(list(temp_vgg16.children())[:-2]))
+        if torch.cuda.is_available():
+            self.vgg16.cuda()
     def forward(self, feed_dict_, *, segSize=None):
         feed_dict = feed_dict_[0]
         # training
@@ -33,8 +58,43 @@ class SegmentationModule(SegmentationModuleBase):
                 (pred, pred_deepsup) = self.decoder(self.encoder(feed_dict['img_data'], return_feature_maps=True))
             else:
                 pred = self.decoder(self.encoder(feed_dict['img_data'], return_feature_maps=True))
+            
+            transform= transforms.Compose([
+                transforms.Resize((544, 768), transforms.InterpolationMode.BILINEAR)
+            ])
+            # transform_seg= transforms.Compose([
+            #     transforms.Resize((544, 768), transforms.InterpolationMode.NEAREST)
+            # ])
+            _, pred_colors = torch.max(pred, dim=1)
 
-            loss = self.crit(pred, feed_dict['seg_label'])
+            colors = scipy.io.loadmat('data/color150.mat')['colors']
+            resized_img = transform(feed_dict['img_data'])
+            resized_seg = transform(feed_dict['seg_label'])
+            resized_pred = transform(pred_colors)
+            resized_seg_pred = torch.cat([resized_seg, resized_pred], axis = 1)
+            
+            resized_seg_color = np.zeros((resized_seg.shape[0], resized_seg.shape[1], resized_seg.shape[2], 3))
+            resized_pred_color = np.zeros((resized_pred.shape[0], resized_pred.shape[1], resized_pred.shape[2], 3))
+            resized_seg_pred_color = np.hstack([resized_seg_color, resized_pred_color])
+            for i in range(resized_seg_pred_color.shape[0]):
+                resized_seg_pred_color[i,:] = colorEncode(resized_seg_pred[i,:,:].numpy(), colors)
+
+            resized_seg_color = torch.from_numpy(resized_seg_pred_color[:, :resized_seg.shape[1], :])
+            resized_seg_color = resized_seg_color.view((8, 3, 544, 768))
+            resized_pred_color = torch.from_numpy(resized_seg_pred_color[:, resized_seg.shape[1]:, :])
+            resized_pred_color = resized_pred_color.view((8, 3, 544, 768))
+            
+            input_vgg_true = torch.cat([resized_img, resized_seg_color], axis = 2)
+            input_vgg_pred = torch.cat([resized_img, resized_pred_color], axis = 2)
+            if torch.cuda.is_available():
+                input_vgg_true.cuda()
+                input_vgg_pred.cuda()
+            
+            self.vgg16.eval()
+            self.encoder.eval()
+            probas_true = self.discriminator(self.vgg16(input_vgg_true.float()))
+            probas_pred = self.discriminator(self.vgg16(input_vgg_pred.float()))
+            loss = self.crit(pred, feed_dict['seg_label']) - torch.log(1-probas_true[:,1]).mean() - torch.log(probas_pred[:,0]).mean()
             if self.deep_sup_scale is not None:
                 loss_deepsup = self.crit(pred_deepsup, feed_dict['seg_label'])
                 loss = loss + loss_deepsup * self.deep_sup_scale
@@ -45,7 +105,6 @@ class SegmentationModule(SegmentationModuleBase):
         else:
             pred = self.decoder(self.encoder(feed_dict['img_data'], return_feature_maps=True), segSize=segSize)
             return pred
-
 
 class ModelBuilder:
     # custom weights initialization

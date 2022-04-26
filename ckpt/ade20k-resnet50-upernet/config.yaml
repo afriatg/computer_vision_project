@@ -34,7 +34,7 @@ TRAIN:
   seed: 304
   start_epoch: 0
   weight_decay: 0.0001
-  workers: 16
+  workers: 8
 VAL:
   batch_size: 1
   checkpoint: epoch_30.pth

@@ -109,7 +109,7 @@ def unique(ar, return_index=False, return_inverse=False, return_counts=False):
 
 
 def colorEncode(labelmap, colors, mode='RGB'):
-    labelmap = labelmap.astype('int')
+    #labelmap = labelmap.astype('int')
     labelmap_rgb = np.zeros((labelmap.shape[0], labelmap.shape[1], 3),
                             dtype=np.uint8)
     for label in unique(labelmap):
