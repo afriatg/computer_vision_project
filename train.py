@@ -16,19 +16,23 @@ from mit_semseg.utils import AverageMeter, parse_devices, setup_logger
 from mit_semseg.lib.nn import UserScatteredDataParallel, user_scattered_collate, patch_replication_callback
 
 import torch.nn.functional as F
+import time
 
 class Discriminator(nn.Module):
     def __init__(self):
       super(Discriminator, self).__init__()
-
-      self.conv1 = nn.Conv2d(512, 64, 3, 3)
-      self.dropout1 = nn.Dropout2d(0.25)
-      self.dropout2 = nn.Dropout2d(0.5)
-      self.fc1 = nn.Linear(5632, 352)
-      self.fc2 = nn.Linear(352, 2)
+      self.conv1 = nn.Conv2d(154, 32, 3, 3)
+      self.conv2 = nn.Conv2d(32, 16, 3, 3)
+      self.dropout1 = nn.Dropout(0.25)
+      self.dropout2 = nn.Dropout(0.5)
+      self.fc1 = nn.Linear(5040, 256)
+      self.fc2 = nn.Linear(256, 32)
+      self.fc3 = nn.Linear(32, 2)
 
     def forward(self, x):
       x = self.conv1(x)
+      x = F.relu(x)
+      x = self.conv2(x)
       x = F.relu(x)
       x = self.dropout1(x)
       x = torch.flatten(x, 1)
@@ -36,6 +40,8 @@ class Discriminator(nn.Module):
       x = F.relu(x)
       x = self.dropout2(x)
       x = self.fc2(x)
+      x = F.relu(x)
+      x = self.fc3(x)
       output = F.softmax(x, dim=1)
       return output
 
@@ -43,56 +49,81 @@ class Discriminator(nn.Module):
 def train(segmentation_module, iterator, optimizers, history, epoch, cfg):
     batch_time = AverageMeter()
     data_time = AverageMeter()
-    ave_total_loss = AverageMeter()
+    ave_total_loss_seg = AverageMeter()
+    ave_total_loss_disc = AverageMeter()
     ave_acc = AverageMeter()
     
     segmentation_module.train(not cfg.TRAIN.fix_bn)
+    # freeze all weights besides the last layer
+    for param in segmentation_module.parameters():
+        param.requires_grad = False
+    list(segmentation_module.parameters())[-1].requires_grad = True
+    list(segmentation_module.parameters())[-2].requires_grad = True
+    list(segmentation_module.parameters())[-3].requires_grad = True
 
     # main loop
     tic = time.time()
     for i in range(cfg.TRAIN.epoch_iters):
         # load a batch of data
+        start_t = time.time()
         batch_data = next(iterator)
         data_time.update(time.time() - tic)
         segmentation_module.zero_grad()
+        # print("read data :", time.time()-start_t)
 
         # adjust learning rate
+        start_t = time.time()
         cur_iter = i + (epoch - 1) * cfg.TRAIN.epoch_iters
         adjust_learning_rate(optimizers, cur_iter, cfg)
+        # print("adjust learning rate :", time.time()-start_t)
 
         # forward pass
-        loss, acc = segmentation_module(batch_data)
-        loss = loss.mean()
+        start_t = time.time()
+        loss_seg, loss_disc, acc = segmentation_module(batch_data)
+        loss_seg = loss_seg.mean()
+        loss_disc = loss_disc.mean()
+        loss = loss_seg + loss_disc
         acc = acc.mean()
+        # print("forward :", time.time()-start_t)
 
         # Backward
-        loss.backward()
+        start_t = time.time()
+        try:
+            loss.backward()
+        except:
+            import ipdb;ipdb.set_trace()
+        # print("loss :", time.time()-start_t)
         for optimizer in optimizers:
+            start_t = time.time()
             optimizer.step()
+            # print("opt :", time.time()-start_t)
 
+        start_t = time.time()
         # measure elapsed time
         batch_time.update(time.time() - tic)
         tic = time.time()
 
         # update average loss and acc
-        ave_total_loss.update(loss.data.item())
+        ave_total_loss_seg.update(loss_seg.data.item())
+        ave_total_loss_disc.update(loss_disc.data.item())
         ave_acc.update(acc.data.item()*100)
-
+        # print("updates :", time.time()-start_t)
         # calculate accuracy, and display
+        start_t = time.time()
         if i % cfg.TRAIN.disp_iter == 0:
             print('Epoch: [{}][{}/{}], Time: {:.2f}, Data: {:.2f}, '
                   'lr_encoder: {:.6f}, lr_decoder: {:.6f}, '
-                  'Accuracy: {:4.2f}, Loss: {:.6f}'
+                  'Accuracy: {:4.2f}, Loss seg: {:.6f}, Loss disc: {:.6f}'
                   .format(epoch, i, cfg.TRAIN.epoch_iters,
                           batch_time.average(), data_time.average(),
                           cfg.TRAIN.running_lr_encoder, cfg.TRAIN.running_lr_decoder,
-                          ave_acc.average(), ave_total_loss.average()))
+                          ave_acc.average(), ave_total_loss_seg.average(), ave_total_loss_disc.average()))
 
             fractional_epoch = epoch - 1 + 1. * i / cfg.TRAIN.epoch_iters
             history['train']['epoch'].append(fractional_epoch)
             history['train']['loss'].append(loss.data.item())
             history['train']['acc'].append(acc.data.item())
-
+        #print("display :", time.time()-start_t)
 
 def checkpoint(nets, history, cfg, epoch):
     print('Saving checkpoints...')
@@ -217,6 +248,8 @@ def main(cfg, gpus):
     # for ele in loader_train:
     #     acc +=1
     #     for keys in ele[0].keys():
+    #         print(keys,"=", ele[0][keys].shape)
+    #         a = input()
     #         try:
     #             _,_,h,w = ele[0][keys].shape
     #             l_heights.append(h)
@@ -256,12 +289,14 @@ def main(cfg, gpus):
         train(segmentation_module, iterator_train, optimizers, history, epoch+1, cfg)
 
         # checkpointing
+        start_time = time.time()
         checkpoint(nets, history, cfg, epoch+1)
-
+        print("chkp :", time.time()-start_time)
     print('Training Done!')
 
 
 if __name__ == '__main__':
+
     assert LooseVersion(torch.__version__) >= LooseVersion('0.4.0'), \
         'PyTorch>=0.4.0 is required'
 
@@ -272,6 +307,7 @@ if __name__ == '__main__':
         "--cfg",
         #default="config/ade20k-resnet50dilated-ppm_deepsup.yaml",
         default = "config/ade20k-resnet50-upernet.yaml",
+        #default = "config/ade20k-resnet18dilated-ppm_deepsup.yaml",
         metavar="FILE",
         help="path to config file",
         type=str,

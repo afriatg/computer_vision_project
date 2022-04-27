@@ -12,8 +12,8 @@ DATASET:
 MODEL:
   arch_encoder: "resnet50"
   arch_decoder: "upernet"
-  weights_decoder: "weights/decoder_epoch_30.pth"
-  weights_encoder: "weights/encoder_epoch_30.pth"
+  weights_decoder: "weights_resnet50_upernet/decoder_epoch_30.pth"
+  weights_encoder: "weights_resnet50_upernet/encoder_epoch_30.pth"
   fc_dim: 2048
 
 

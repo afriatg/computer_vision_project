@@ -12,6 +12,8 @@ DATASET:
 MODEL:
   arch_encoder: "resnet18dilated"
   arch_decoder: "ppm_deepsup"
+  weights_decoder: "weights/decoder_epoch_20.pth"
+  weights_encoder: "weights/encoder_epoch_20.pth"
   fc_dim: 512
 
 TRAIN:
@@ -21,13 +23,13 @@ TRAIN:
   epoch_iters: 5000
   optim: "SGD"
   lr_encoder: 0.02
-  lr_decoder: 0.02
+  lr_decoder: 0.01
   lr_pow: 0.9
   beta1: 0.9
   weight_decay: 1e-4
   deep_sup_scale: 0.4
   fix_bn: False
-  workers: 16
+  workers: 8
   disp_iter: 20
   seed: 304
 

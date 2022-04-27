@@ -1,2 +1,5 @@
 data
 weights
+old_weights
+weights_resnet18dilated-ppm_deepsup
+weights_resnet50_upernet
