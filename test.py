@@ -92,7 +92,8 @@ def test(segmentation_module, loader, gpu):
 
 
 def main(cfg, gpu):
-    torch.cuda.set_device(gpu)
+    if torch.cuda.is_available():
+        torch.cuda.set_device(gpu)
 
     # Network Builders
     net_encoder = ModelBuilder.build_encoder(
@@ -107,8 +108,8 @@ def main(cfg, gpu):
         use_softmax=True)
 
     crit = nn.NLLLoss(ignore_index=-1)
-
-    segmentation_module = SegmentationModule(net_encoder, net_decoder, crit)
+    discriminator = None
+    segmentation_module = SegmentationModule(net_encoder, net_decoder, discriminator, crit)
 
     # Dataset and Loader
     dataset_test = TestDataset(
@@ -121,8 +122,10 @@ def main(cfg, gpu):
         collate_fn=user_scattered_collate,
         num_workers=5,
         drop_last=True)
+    import ipdb;ipdb.set_trace()
 
-    segmentation_module.cuda()
+    if torch.cuda.is_available():
+        segmentation_module.cuda()
 
     # Main loop
     test(segmentation_module, loader_test, gpu)
@@ -139,13 +142,15 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         "--imgs",
-        required=True,
+        #required=True,
+        default="./data/validation.odgt",
         type=str,
         help="an image path, or a directory name"
     )
     parser.add_argument(
         "--cfg",
-        default="config/ade20k-resnet50dilated-ppm_deepsup.yaml",
+        #default="config/ade20k-resnet50dilated-ppm_deepsup.yaml",
+        default="config/ade20k-resnet50-upernet_test.yaml",
         metavar="FILE",
         help="path to config file",
         type=str,
@@ -176,21 +181,22 @@ if __name__ == '__main__':
     cfg.MODEL.arch_decoder = cfg.MODEL.arch_decoder.lower()
 
     # absolute paths of model weights
-    cfg.MODEL.weights_encoder = os.path.join(
-        cfg.DIR, 'encoder_' + cfg.TEST.checkpoint)
-    cfg.MODEL.weights_decoder = os.path.join(
-        cfg.DIR, 'decoder_' + cfg.TEST.checkpoint)
+    # cfg.MODEL.weights_encoder = os.path.join(
+    #     cfg.DIR, 'encoder_' + cfg.TEST.checkpoint)
+    # cfg.MODEL.weights_decoder = os.path.join(
+    #     cfg.DIR, 'decoder_' + cfg.TEST.checkpoint)
 
-    assert os.path.exists(cfg.MODEL.weights_encoder) and \
-        os.path.exists(cfg.MODEL.weights_decoder), "checkpoint does not exitst!"
+    # assert os.path.exists(cfg.MODEL.weights_encoder) and \
+    #     os.path.exists(cfg.MODEL.weights_decoder), "checkpoint does not exitst!"
 
-    # generate testing image list
-    if os.path.isdir(args.imgs):
-        imgs = find_recursive(args.imgs)
-    else:
-        imgs = [args.imgs]
-    assert len(imgs), "imgs should be a path to image (.jpg) or directory."
-    cfg.list_test = [{'fpath_img': x} for x in imgs]
+    # # generate testing image list
+    # if os.path.isdir(args.imgs):
+    #     imgs = find_recursive(args.imgs)
+    # else:
+    #     imgs = [args.imgs]
+    # assert len(imgs), "imgs should be a path to image (.jpg) or directory."
+    # cfg.list_test = [{'fpath_img': x} for x in imgs]
+    cfg.list_test = args.imgs
 
     if not os.path.isdir(cfg.TEST.result):
         os.makedirs(cfg.TEST.result)

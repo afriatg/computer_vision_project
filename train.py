@@ -46,7 +46,7 @@ class Discriminator(nn.Module):
       return output
 
 # train one epoch
-def train(segmentation_module, iterator, optimizers, history, epoch, cfg):
+def train(segmentation_module, iterator, optimizers, history, epoch, cfg, use_disc):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     ave_total_loss_seg = AverageMeter()
@@ -79,10 +79,13 @@ def train(segmentation_module, iterator, optimizers, history, epoch, cfg):
 
         # forward pass
         start_t = time.time()
-        loss_seg, loss_disc, acc = segmentation_module(batch_data)
+        loss_seg, loss_disc, acc = segmentation_module(batch_data, use_disc)
         loss_seg = loss_seg.mean()
-        loss_disc = loss_disc.mean()
-        loss = loss_seg + loss_disc
+        if use_disc:
+            loss_disc = loss_disc.mean()
+            loss = loss_seg + loss_disc
+        else:
+            loss = loss_seg
         acc = acc.mean()
         # print("forward :", time.time()-start_t)
 
@@ -105,7 +108,10 @@ def train(segmentation_module, iterator, optimizers, history, epoch, cfg):
 
         # update average loss and acc
         ave_total_loss_seg.update(loss_seg.data.item())
-        ave_total_loss_disc.update(loss_disc.data.item())
+        if use_disc:
+            ave_total_loss_disc.update(loss_disc.data.item())
+        else:
+            ave_total_loss_disc.update(loss_disc)
         ave_acc.update(acc.data.item()*100)
         # print("updates :", time.time()-start_t)
         # calculate accuracy, and display
@@ -117,30 +123,51 @@ def train(segmentation_module, iterator, optimizers, history, epoch, cfg):
                   .format(epoch, i, cfg.TRAIN.epoch_iters,
                           batch_time.average(), data_time.average(),
                           cfg.TRAIN.running_lr_encoder, cfg.TRAIN.running_lr_decoder,
-                          ave_acc.average(), ave_total_loss_seg.average(), ave_total_loss_disc.average()))
+                          ave_acc.average(), ave_total_loss_seg.average(), ave_total_loss_disc.average()), flush=True)
 
             fractional_epoch = epoch - 1 + 1. * i / cfg.TRAIN.epoch_iters
             history['train']['epoch'].append(fractional_epoch)
             history['train']['loss'].append(loss.data.item())
+            if use_disc:
+                history['train']['loss_disc'].append(loss_disc.data.item())
+            history['train']['loss_seg'].append(loss_seg.data.item())
             history['train']['acc'].append(acc.data.item())
         #print("display :", time.time()-start_t)
 
-def checkpoint(nets, history, cfg, epoch):
+def checkpoint(nets, history, cfg, epoch, use_disc):
     print('Saving checkpoints...')
-    (net_encoder, net_decoder, _, crit) = nets
+    (net_encoder, net_decoder, discriminator, crit) = nets
 
     dict_encoder = net_encoder.state_dict()
     dict_decoder = net_decoder.state_dict()
+    dict_discriminator = discriminator.state_dict()
 
-    torch.save(
-        history,
-        '{}/history_epoch_{}.pth'.format(cfg.DIR, epoch))
-    torch.save(
-        dict_encoder,
-        '{}/encoder_epoch_{}.pth'.format(cfg.DIR, epoch))
-    torch.save(
-        dict_decoder,
-        '{}/decoder_epoch_{}.pth'.format(cfg.DIR, epoch))
+    if use_disc:
+        torch.save(
+            history,
+            '{}/history_epoch_{}.pth'.format(cfg.DIR+"-GAN", epoch))
+        torch.save(
+            dict_encoder,
+            '{}/encoder_epoch_{}.pth'.format(cfg.DIR+"-GAN", epoch))
+        torch.save(
+            dict_decoder,
+            '{}/decoder_epoch_{}.pth'.format(cfg.DIR+"-GAN", epoch))
+        torch.save(
+            dict_discriminator,
+            '{}/discriminator_epoch_{}.pth'.format(cfg.DIR+"-GAN", epoch))
+    else:
+        torch.save(
+            history,
+            '{}/history_epoch_{}.pth'.format(cfg.DIR, epoch))
+        torch.save(
+            dict_encoder,
+            '{}/encoder_epoch_{}.pth'.format(cfg.DIR, epoch))
+        torch.save(
+            dict_decoder,
+            '{}/decoder_epoch_{}.pth'.format(cfg.DIR, epoch))
+        torch.save(
+            dict_discriminator,
+            '{}/discriminator_epoch_{}.pth'.format(cfg.DIR, epoch))
 
 
 def group_weight(module):
@@ -197,7 +224,7 @@ def adjust_learning_rate(optimizers, cur_iter, cfg):
         param_group['lr'] = cfg.TRAIN.running_lr_decoder
 
 
-def main(cfg, gpus):
+def main(cfg, gpus, use_disc):
     # Network Builders
     net_encoder = ModelBuilder.build_encoder(
         arch=cfg.MODEL.arch_encoder.lower(),
@@ -283,14 +310,14 @@ def main(cfg, gpus):
     optimizers = create_optimizers(nets, cfg)
 
     # Main loop
-    history = {'train': {'epoch': [], 'loss': [], 'acc': []}}
+    history = {'train': {'epoch': [], 'loss': [], 'loss_seg': [], 'loss_disc': [], 'acc': []}}
 
     for epoch in range(cfg.TRAIN.start_epoch, cfg.TRAIN.num_epoch):
-        train(segmentation_module, iterator_train, optimizers, history, epoch+1, cfg)
+        train(segmentation_module, iterator_train, optimizers, history, epoch+1, cfg, use_disc)
 
         # checkpointing
         start_time = time.time()
-        checkpoint(nets, history, cfg, epoch+1)
+        checkpoint(nets, history, cfg, epoch+1, use_disc)
         print("chkp :", time.time()-start_time)
     print('Training Done!')
 
@@ -323,7 +350,14 @@ if __name__ == '__main__':
         default=None,
         nargs=argparse.REMAINDER,
     )
+    parser.add_argument(
+        "--use_disc",
+        default=0,
+        type = int,
+    )
     args = parser.parse_args()
+    print(args, flush=True)
+    use_disc = args.use_disc
 
     cfg.merge_from_file(args.cfg)
     cfg.merge_from_list(args.opts)
@@ -362,4 +396,4 @@ if __name__ == '__main__':
 
     random.seed(cfg.TRAIN.seed)
     torch.manual_seed(cfg.TRAIN.seed)
-    main(cfg, gpus)
+    main(cfg, gpus, use_disc)

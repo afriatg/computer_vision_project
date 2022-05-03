@@ -51,7 +51,7 @@ class SegmentationModule(SegmentationModuleBase):
         #     self.vgg16.cuda()
         self.decoder = net_dec
 
-    def forward(self, feed_dict_, *, segSize=None):
+    def forward(self, feed_dict_, use_disc, *, segSize=None):
         feed_dict = feed_dict_[0]
         transform_img = transforms.Compose([
             transforms.Resize((feed_dict['seg_label'].shape[1], feed_dict['seg_label'].shape[2]), transforms.InterpolationMode.BILINEAR)
@@ -83,57 +83,61 @@ class SegmentationModule(SegmentationModuleBase):
             batch_seg = transform_seg(batch_seg)
             # _, pred_colors = torch.max(pred, dim=1)
             one_hot_labels = torch.nn.functional.one_hot(batch_seg+1, 151)
-            true_pred = torch.concat([one_hot_labels[:,:,:,1:], one_hot_labels[:,:,:,0:1]], axis = 3)
+            true_pred = torch.cat([one_hot_labels[:,:,:,1:], one_hot_labels[:,:,:,0:1]], axis = 3)
             true_pred = true_pred.view((true_pred.shape[0], true_pred.shape[3], true_pred.shape[1], true_pred.shape[2]))
             add_class = torch.zeros((pred.shape[0], 1, pred.shape[2], pred.shape[3]))
-            pred_aux = torch.concat([pred, add_class], axis = 1)
+            pred_aux = torch.cat([pred, add_class], axis = 1)
             pred_aux = nn.functional.interpolate(pred_aux, size=(544//4, 768//4), mode='bilinear', align_corners=False)
-            batch_img = transform_img(batch_img)
-            input_vgg_true = torch.cat([batch_img, true_pred], axis = 1)
-            input_vgg_pred = torch.cat([batch_img, pred_aux], axis = 1)
 
-            # pred_colors = nn.functional.interpolate(pred_colors, size=segSize, mode='bilinear', align_corners=False)
-            # colors = scipy.io.loadmat('data/color150.mat')['colors']
-            # #resized_img = transform(feed_dict['img_data'])
-            # #resized_seg = transform(feed_dict['seg_label'])
-            # #resized_pred = transform(pred_colors)
-            # resized_img = feed_dict['img_data']
-            # resized_seg = feed_dict['seg_label']
-            # resized_pred = pred_colors
+            if use_disc:
+                batch_img = transform_img(batch_img)
+                input_vgg_true = torch.cat([batch_img, true_pred], axis = 1)
+                input_vgg_pred = torch.cat([batch_img, pred_aux], axis = 1)
 
-            # resized_seg_pred = torch.cat([resized_seg, resized_pred], axis = 1)
-            
-            # resized_seg_color = np.zeros((resized_seg.shape[0], resized_seg.shape[1], resized_seg.shape[2], 3))
-            # resized_pred_color = np.zeros((resized_pred.shape[0], resized_pred.shape[1], resized_pred.shape[2], 3))
-            # resized_seg_pred_color = np.hstack([resized_seg_color, resized_pred_color])
-            # for i in range(resized_seg_pred_color.shape[0]):
-            #     resized_seg_pred_color[i,:] = colorEncode(resized_seg_pred[i,:,:].numpy(), colors)
+                # pred_colors = nn.functional.interpolate(pred_colors, size=segSize, mode='bilinear', align_corners=False)
+                # colors = scipy.io.loadmat('data/color150.mat')['colors']
+                # #resized_img = transform(feed_dict['img_data'])
+                # #resized_seg = transform(feed_dict['seg_label'])
+                # #resized_pred = transform(pred_colors)
+                # resized_img = feed_dict['img_data']
+                # resized_seg = feed_dict['seg_label']
+                # resized_pred = pred_colors
 
-            # resized_seg_color = torch.from_numpy(resized_seg_pred_color[:, :resized_seg.shape[1], :])
-            # resized_seg_color = resized_seg_color.view((resized_seg.shape[0], 3, resized_seg_color.shape[1], resized_seg_color.shape[2]))
-            # resized_pred_color = torch.from_numpy(resized_seg_pred_color[:, resized_seg.shape[1]:, :])
-            # resized_pred_color = resized_pred_color.view((resized_seg.shape[0], 3, resized_seg_color.shape[1], resized_seg_color.shape[2]))
-            
-            # input_vgg_true = torch.cat([resized_img, resized_seg_color], axis = 2)
-            # input_vgg_pred = torch.cat([resized_img, resized_pred_color], axis = 2)
-            
-            if torch.cuda.is_available():
-                input_vgg_true.cuda()
-                input_vgg_pred.cuda()
-            
-            #print("model :", time.time() - start_time)
-            start_time = time.time()
-            # self.vgg16.eval()
-            # self.encoder.eval()
-            probas_true = self.discriminator(input_vgg_true)
-            probas_pred = self.discriminator(input_vgg_pred)
-            #print("disc :", time.time() - start_time)
-            start_time = time.time()
+                # resized_seg_pred = torch.cat([resized_seg, resized_pred], axis = 1)
+                
+                # resized_seg_color = np.zeros((resized_seg.shape[0], resized_seg.shape[1], resized_seg.shape[2], 3))
+                # resized_pred_color = np.zeros((resized_pred.shape[0], resized_pred.shape[1], resized_pred.shape[2], 3))
+                # resized_seg_pred_color = np.hstack([resized_seg_color, resized_pred_color])
+                # for i in range(resized_seg_pred_color.shape[0]):
+                #     resized_seg_pred_color[i,:] = colorEncode(resized_seg_pred[i,:,:].numpy(), colors)
+
+                # resized_seg_color = torch.from_numpy(resized_seg_pred_color[:, :resized_seg.shape[1], :])
+                # resized_seg_color = resized_seg_color.view((resized_seg.shape[0], 3, resized_seg_color.shape[1], resized_seg_color.shape[2]))
+                # resized_pred_color = torch.from_numpy(resized_seg_pred_color[:, resized_seg.shape[1]:, :])
+                # resized_pred_color = resized_pred_color.view((resized_seg.shape[0], 3, resized_seg_color.shape[1], resized_seg_color.shape[2]))
+                
+                # input_vgg_true = torch.cat([resized_img, resized_seg_color], axis = 2)
+                # input_vgg_pred = torch.cat([resized_img, resized_pred_color], axis = 2)
+                
+                if torch.cuda.is_available():
+                    input_vgg_true.cuda()
+                    input_vgg_pred.cuda()
+                
+                #print("model :", time.time() - start_time)
+                start_time = time.time()
+                # self.vgg16.eval()
+                # self.encoder.eval()
+                probas_true = self.discriminator(input_vgg_true)
+                probas_pred = self.discriminator(input_vgg_pred)
+                #print("disc :", time.time() - start_time)
+                start_time = time.time()
+                loss_disc = - torch.log(1-probas_true[:,1]) - torch.log(probas_pred[:,0])
+                #print("loss computation :", time.time() - start_time)
+                #loss = self.crit(pred, feed_dict['seg_label'])
+            else:
+                loss_disc = 0
             loss_seg = self.crit(pred_aux, batch_seg)
-            loss_disc = - torch.log(1-probas_true[:,1]) - torch.log(probas_pred[:,0])
-            #print("loss computation :", time.time() - start_time)
-            #loss = self.crit(pred, feed_dict['seg_label'])
-            
+
             if self.deep_sup_scale is not None:
                 loss_deepsup = self.crit(pred_deepsup, batch_seg)
                 loss_seg = loss_seg + loss_deepsup * self.deep_sup_scale
